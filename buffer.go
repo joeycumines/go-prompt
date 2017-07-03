@@ -2,21 +2,16 @@ package prompt
 
 import (
 	"strings"
-
-	"github.com/joeycumines/go-prompt/debug"
-	istrings "github.com/joeycumines/go-prompt/strings"
-	"golang.org/x/exp/utf8string"
 )
 
 // Buffer emulates the console buffer.
 type Buffer struct {
 	workingLines    []string // The working lines. Similar to history
-	workingIndex    int      // index of the current line
-	startLine       int      // Line number of the first visible line in the terminal (0-indexed)
-	cursorPosition  istrings.RuneNumber
-	cacheDocument   *Document
-	preferredColumn istrings.Width // Remember the original column for the next up/down movement.
-	lastKeyStroke   Key
+	workingIndex    int
+	CursorPosition  int
+	selectionState  *SelectionState
+	cacheDocument   *Document // TODO: More effective cache using Queue or map. See https://github.com/jonathanslenders/python-prompt-toolkit/blob/master/prompt_toolkit/cache.py#L55-L93
+	preferredColumn int       // Remember the original column for the next up/down movement.
 }
 
 // Text returns string of the current line.
@@ -24,333 +19,175 @@ func (b *Buffer) Text() string {
 	return b.workingLines[b.workingIndex]
 }
 
-func (b *Buffer) resetPreferredColumn() {
-	b.preferredColumn = -1
-}
-
-func (b *Buffer) updatePreferredColumn() {
-	b.preferredColumn = b.Document().CursorPositionCol()
-}
-
-// Document method to return document instance from the current text and cursor position.
+// Document method to return document instance from the current text,
+// cursor position and selection state.
 func (b *Buffer) Document() (d *Document) {
 	if b.cacheDocument == nil ||
 		b.cacheDocument.Text != b.Text() ||
-		b.cacheDocument.cursorPosition != b.cursorPosition {
+		b.cacheDocument.CursorPosition != b.CursorPosition ||
+		b.cacheDocument.selectionState != b.cacheDocument.selectionState {
 		b.cacheDocument = &Document{
 			Text:           b.Text(),
-			cursorPosition: b.cursorPosition,
+			CursorPosition: b.CursorPosition,
+			selectionState: b.selectionState,
 		}
 	}
-	b.cacheDocument.lastKey = b.lastKeyStroke
 	return b.cacheDocument
 }
 
-// DisplayCursorPosition returns the cursor position on rendered text on terminal emulators.
-// So if Document is "日本(cursor)語", DisplayedCursorPosition returns 4 because '日' and '本' are double width characters.
-//
-// For exact-fill boundaries (text that exactly fills the column width), the returned
-// Position uses legacy semantics: X=0, Y+=1. Use DisplayCursorPositionFullWidth to
-// access the raw exact-fill state instead.
-func (b *Buffer) DisplayCursorPosition(columns istrings.Width) Position {
-	return b.Document().DisplayCursorPosition(columns)
-}
-
-// DisplayCursorPositionFullWidth returns the cursor position on rendered text
-// along with whether the cursor sits at an exact-fill wrapped boundary.
-// When fullWidth is true, the line exactly filled the column width (X == columns).
-// This is the raw internal representation; callers that need legacy coordinates
-// should use DisplayCursorPosition instead.
-func (b *Buffer) DisplayCursorPositionFullWidth(columns istrings.Width) (Position, bool) {
-	return b.Document().DisplayCursorPositionFullWidth(columns)
-}
-
-// InsertTextMoveCursor inserts a string into the buffer and moves the cursor.
-func (b *Buffer) InsertTextMoveCursor(text string, columns istrings.Width, rows int, overwrite bool) {
-	b.insertText(text, columns, rows, overwrite, true)
-}
-
-// InsertText inserts a string into the buffer without moving the cursor.
-func (b *Buffer) InsertText(text string, overwrite bool) {
-	b.insertText(text, 0, 0, overwrite, false)
-}
-
-// insertText insert string from current line.
-func (b *Buffer) insertText(text string, columns istrings.Width, rows int, overwrite bool, moveCursor bool) {
-	currentTextRunes := []rune(b.Text())
-	cursor := b.cursorPosition
+// InsertText insert string from current line.
+func (b *Buffer) InsertText(v string, overwrite bool, moveCursor bool) {
+	ot := b.Text()
+	oc := b.CursorPosition
 
 	if overwrite {
-		overwritten := string(currentTextRunes[cursor:])
-		if len(overwritten) >= int(cursor)+len(text) {
-			overwritten = string(currentTextRunes[cursor : cursor+istrings.RuneCountInString(text)])
-		}
-		if i := strings.IndexAny(overwritten, "\n"); i != -1 {
+		overwritten := ot[oc : oc+len(v)]
+		if strings.Contains(overwritten, "\n") {
+			i := strings.IndexAny(overwritten, "\n")
 			overwritten = overwritten[:i]
 		}
-		b.setText(
-			string(currentTextRunes[:cursor])+text+string(currentTextRunes[cursor+istrings.RuneCountInString(overwritten):]),
-			columns,
-			rows,
-		)
+		b.setText(ot[:oc] + v + ot[oc+len(overwritten):])
 	} else {
-		b.setText(
-			string(currentTextRunes[:cursor])+text+string(currentTextRunes[cursor:]),
-			columns,
-			rows,
-		)
+		b.setText(ot[:oc] + v + ot[oc:])
 	}
 
 	if moveCursor {
-		b.cursorPosition += istrings.RuneCountInString(text)
-		b.recalculateStartLine(columns, rows)
-		b.updatePreferredColumn()
-	}
-}
-
-func (b *Buffer) resetStartLine() {
-	b.startLine = 0
-}
-
-// Calculates the startLine once again and returns true when it's been changed.
-//
-// The viewport scrolls only when the cursor's logical line (pos.Y) is outside
-// the visible range [startLine, startLine+rows-1]. For exact-fill cursors
-// (fullWidth=true), the terminal has NOT yet wrapped — xenl/deferred-wrap
-// semantics mean the next character will trigger the wrap. The viewport does
-// NOT preemptively scroll for the wrap that hasn't happened. This guarantees
-// strict idempotency: calling this function N times on identical state never
-// changes startLine.
-func (b *Buffer) recalculateStartLine(columns istrings.Width, rows int) bool {
-	origStartLine := b.startLine
-	pos, _ := b.DisplayCursorPositionFullWidth(columns)
-	if rows > 0 {
-		// Normal case: keep cursor within [startLine, startLine+rows-1].
-		if pos.Y > b.startLine+rows-1 {
-			b.startLine = pos.Y - rows + 1
-		} else if pos.Y < b.startLine {
-			b.startLine = pos.Y
-		}
-	} else {
-		// Edge case: viewport has no height. Keep cursor at or above its
-		// absolute position (don't push startLine beyond the content).
-		if pos.Y < b.startLine {
-			b.startLine = pos.Y
-		}
+		b.CursorPosition += len(v)
 	}
 
-	if b.startLine < 0 {
-		b.startLine = 0
-	}
-	return origStartLine != b.startLine
+	// TODO: Fire onTextInsert event.
+	// https://github.com/jonathanslenders/python-prompt-toolkit/blob/master/prompt_toolkit/buffer.py#L1063-L1065
 }
 
-// SetText method to set text and update cursorPosition.
+// SetText method to set text and update CursorPosition.
 // (When doing this, make sure that the cursor_position is valid for this text.
 // text/cursor_position should be consistent at any time, otherwise set a Document instead.)
-func (b *Buffer) setText(text string, col istrings.Width, row int) {
-	debug.Assert(b.cursorPosition <= istrings.RuneCountInString(text), "length of input should be shorter than cursor position")
-	b.workingLines[b.workingIndex] = text
-	b.recalculateStartLine(col, row)
-	b.resetPreferredColumn()
+func (b *Buffer) setText(v string) {
+	if b.CursorPosition > len(v) {
+		panic("The length of input value should be shorter than the position of cursor.")
+	}
+	// TODO: Add checking that the buffer is read only?
+	// https://github.com/jonathanslenders/python-prompt-toolkit/blob/master/prompt_toolkit/buffer.py#L374-L376
+	o := b.workingLines[b.workingIndex]
+	b.workingLines[b.workingIndex] = v
+
+	if o != v {
+		// Text is changed.
+		// TODO: Call callback function triggered by text changed. And also history search text should reset.
+		// https://github.com/jonathanslenders/python-prompt-toolkit/blob/master/prompt_toolkit/buffer.py#L380-L384
+	}
 }
 
 // Set cursor position. Return whether it changed.
-func (b *Buffer) setCursorPosition(p istrings.RuneNumber) {
-	b.cursorPosition = max(p, 0)
+func (b *Buffer) setCursorPosition(p int) {
+	o := b.CursorPosition
+	if p > 0 {
+		b.CursorPosition = p
+	} else {
+		b.CursorPosition = 0
+	}
+	if p != o {
+		// Cursor position is changed.
+		// TODO: Call a onCursorPositionChanged function.
+	}
 }
 
-func (b *Buffer) setDocument(d *Document, columns istrings.Width, rows int) {
+func (b *Buffer) setDocument(d *Document) {
 	b.cacheDocument = d
-	b.setCursorPosition(d.cursorPosition) // Call before setText because setText check the relation between cursorPosition and line length.
-	b.setText(d.Text, columns, rows)
-	b.recalculateStartLine(columns, rows)
-	b.resetPreferredColumn()
+	b.setCursorPosition(d.CursorPosition) // Call before setText because setText check the relation between cursorPosition and line length.
+	b.setText(d.Text)
 }
 
-// CursorLeft moves to the left on the current line by the given amount of graphemes.
-// Returns true when the view should be rerendered.
-func (b *Buffer) CursorLeft(count istrings.GraphemeNumber, columns istrings.Width, rows int) bool {
-	return b.cursorHorizontalMove(b.Document().GetCursorLeftPosition(count), columns, rows)
+// CursorLeft move to left on the current line.
+func (b *Buffer) CursorLeft(count int) {
+	b.CursorPosition += b.Document().GetCursorLeftPosition(count)
 }
 
-// CursorLeftRunes moves to the left on the current line by the given amount of runes.
-// Returns true when the view should be rerendered.
-func (b *Buffer) CursorLeftRunes(count istrings.RuneNumber, columns istrings.Width, rows int) bool {
-	return b.cursorHorizontalMove(b.Document().GetCursorLeftPositionRunes(count), columns, rows)
-}
-
-// CursorRight moves to the right on the current line by the given amount of graphemes.
-// Returns true when the view should be rerendered.
-func (b *Buffer) CursorRight(count istrings.GraphemeNumber, columns istrings.Width, rows int) bool {
-	return b.cursorHorizontalMove(b.Document().GetCursorRightPosition(count), columns, rows)
-}
-
-// CursorRightRunes moves to the right on the current line by the given amount of runes.
-// Returns true when the view should be rerendered.
-func (b *Buffer) CursorRightRunes(count istrings.RuneNumber, columns istrings.Width, rows int) bool {
-	return b.cursorHorizontalMove(b.Document().GetCursorRightPositionRunes(count), columns, rows)
-}
-
-func (b *Buffer) cursorHorizontalMove(count istrings.RuneNumber, columns istrings.Width, rows int) bool {
-	b.cursorPosition += count
-	b.updatePreferredColumn()
-	return b.recalculateStartLine(columns, rows)
+// CursorRight move to right on the current line.
+func (b *Buffer) CursorRight(count int) {
+	b.CursorPosition += b.Document().GetCursorRightPosition(count)
 }
 
 // CursorUp move cursor to the previous line.
 // (for multi-line edit).
-// Returns true when the view should be rerendered.
-func (b *Buffer) CursorUp(count int, columns istrings.Width, rows int) bool {
-	b.cursorPosition += b.Document().GetCursorUpPosition(count, b.preferredColumn)
-	return b.recalculateStartLine(columns, rows)
+func (b *Buffer) CursorUp(count int) {
+	orig := b.preferredColumn
+	if b.preferredColumn == -1 { // -1 means nil
+		orig = b.Document().CursorPositionCol()
+	}
+	b.CursorPosition += b.Document().GetCursorUpPosition(count, orig)
+
+	// Remember the original column for the next up/down movement.
+	b.preferredColumn = orig
 }
 
 // CursorDown move cursor to the next line.
 // (for multi-line edit).
-// Returns true when the view should be rerendered.
-func (b *Buffer) CursorDown(count int, columns istrings.Width, rows int) bool {
-	b.cursorPosition += b.Document().GetCursorDownPosition(count, b.preferredColumn)
-	return b.recalculateStartLine(columns, rows)
-}
-
-// DeleteBeforeCursor deletes the specified number of graphemes before the cursor and returns the deleted text.
-func (b *Buffer) DeleteBeforeCursor(count istrings.GraphemeNumber, columns istrings.Width, rows int) string {
-	debug.Assert(count >= 0, "count should be positive")
-	if b.cursorPosition < 0 {
-		return ""
+func (b *Buffer) CursorDown(count int) {
+	orig := b.preferredColumn
+	if b.preferredColumn == -1 { // -1 means nil
+		orig = b.Document().CursorPositionCol()
 	}
+	b.CursorPosition += b.Document().GetCursorDownPosition(count, orig)
 
-	var deleted string
-
-	textUtf8 := utf8string.NewString(b.Text())
-	textBeforeCursor := textUtf8.Slice(0, int(b.cursorPosition))
-	graphemeLength := istrings.GraphemeCountInString(textBeforeCursor)
-
-	start := max(istrings.RuneIndexNthGrapheme(textBeforeCursor, graphemeLength-count), 0)
-	deleted = textUtf8.Slice(int(start), int(b.cursorPosition))
-	b.setDocument(
-		&Document{
-			Text:           textUtf8.Slice(0, int(start)) + textUtf8.Slice(int(b.cursorPosition), textUtf8.RuneCount()),
-			cursorPosition: b.cursorPosition - istrings.RuneCountInString(deleted),
-		},
-		columns,
-		rows,
-	)
-
-	b.recalculateStartLine(columns, rows)
-	b.updatePreferredColumn()
-	return deleted
+	// Remember the original column for the next up/down movement.
+	b.preferredColumn = orig
 }
 
-// DeleteBeforeCursorRunes deletes the specified number of runes before the cursor and returns the deleted text.
-func (b *Buffer) DeleteBeforeCursorRunes(count istrings.RuneNumber, columns istrings.Width, rows int) (deleted string) {
-	// Defensive: ensure non-negative count. Debug assertion is helpful in tests,
-	// but in production builds the assert is a no-op, so explicitly guard here.
-	debug.Assert(count >= 0, "count should be positive")
+// DeleteBeforeCursor delete specified number of characters before cursor and return the deleted text.
+func (b *Buffer) DeleteBeforeCursor(count int) (deleted string) {
 	if count <= 0 {
-		return ""
+		panic("The count argument on DeleteBeforeCursor should grater than 0.")
 	}
-	if b.cursorPosition <= 0 {
-		return ""
-	}
-	r := []rune(b.Text())
 
-	start := max(b.cursorPosition-count, 0)
-	// Ensure we do not produce a slice with start > end which would panic.
-	if int(start) > len(r) || int(b.cursorPosition) > len(r) {
-		// Fall back to safe no-op delete when indices are out of range.
-		return ""
+	if b.CursorPosition > 0 {
+		start := b.CursorPosition - count
+		if start < 0 {
+			start = 0
+		}
+		deleted = b.Text()[start:b.CursorPosition]
+		b.setDocument(&Document{
+			Text:           b.Text()[:start] + b.Text()[b.CursorPosition:],
+			CursorPosition: b.CursorPosition - len(deleted),
+		})
 	}
-	deleted = string(r[start:b.cursorPosition])
-	b.setDocument(
-		&Document{
-			Text:           string(r[:start]) + string(r[b.cursorPosition:]),
-			cursorPosition: b.cursorPosition - istrings.RuneNumber(len([]rune(deleted))),
-		},
-		columns,
-		rows,
-	)
-	b.recalculateStartLine(columns, rows)
-	b.updatePreferredColumn()
 	return
 }
 
 // NewLine means CR.
-func (b *Buffer) NewLine(columns istrings.Width, rows int, copyMargin bool) {
+func (b *Buffer) NewLine(copyMargin bool) {
 	if copyMargin {
-		b.InsertTextMoveCursor("\n"+b.Document().leadingWhitespaceInCurrentLine(), columns, rows, false)
+		b.InsertText("\n"+b.Document().leadingWhitespaceInCurrentLine(), false, true)
 	} else {
-		b.InsertTextMoveCursor("\n", columns, rows, false)
+		b.InsertText("\n", false, true)
 	}
 }
 
-// Delete deletes the specified number of graphemes and returns the deleted text.
-func (b *Buffer) Delete(count istrings.GraphemeNumber, col istrings.Width, row int) string {
-	textUtf8 := utf8string.NewString(b.Text())
-	if b.cursorPosition >= istrings.RuneCountInString(b.Text()) {
-		return ""
+// Delete specified number of characters and Return the deleted text.
+func (b *Buffer) Delete(count int) (deleted string) {
+	if b.CursorPosition < len(b.Text()) {
+		deleted = b.Document().TextAfterCursor()[:count]
+		b.setText(b.Text()[:b.CursorPosition] + b.Text()[b.CursorPosition+len(deleted):])
 	}
-
-	textAfterCursor := b.Document().TextAfterCursor()
-	textAfterCursorUtf8 := utf8string.NewString(textAfterCursor)
-
-	deletedRunes := textAfterCursorUtf8.Slice(0, int(istrings.RuneIndexNthGrapheme(textAfterCursor, count)))
-
-	b.setText(
-		textUtf8.Slice(0, int(b.cursorPosition))+textUtf8.Slice(int(b.cursorPosition)+int(istrings.RuneCountInString(deletedRunes)), textUtf8.RuneCount()),
-		col,
-		row,
-	)
-
-	deleted := string(deletedRunes)
-	return deleted
-}
-
-// DeleteRunes deletes the specified number of runes and returns the deleted text.
-func (b *Buffer) DeleteRunes(count istrings.RuneNumber, col istrings.Width, row int) string {
-	r := []rune(b.Text())
-	if b.cursorPosition < istrings.RuneNumber(len(r)) {
-		textAfterCursor := b.Document().TextAfterCursor()
-		textAfterCursorRunes := []rune(textAfterCursor)
-		deletedRunes := textAfterCursorRunes[:count]
-		b.setText(
-			string(r[:b.cursorPosition])+string(r[b.cursorPosition+istrings.RuneNumber(len(deletedRunes)):]),
-			col,
-			row,
-		)
-
-		deleted := string(deletedRunes)
-		return deleted
-	}
-
-	return ""
+	return
 }
 
 // JoinNextLine joins the next line to the current one by deleting the line ending after the current line.
-func (b *Buffer) JoinNextLine(separator string, col istrings.Width, row int) {
+func (b *Buffer) JoinNextLine(separator string) {
 	if !b.Document().OnLastLine() {
-		b.cursorPosition += b.Document().GetEndOfLinePosition()
-		b.Delete(1, col, row)
+		b.CursorPosition += b.Document().GetEndOfLinePosition()
+		b.Delete(1)
 		// Remove spaces
-		b.setText(
-			b.Document().TextBeforeCursor()+separator+strings.TrimLeft(b.Document().TextAfterCursor(), " "),
-			col,
-			row,
-		)
+		b.setText(b.Document().TextBeforeCursor() + separator + strings.TrimLeft(b.Document().TextAfterCursor(), " "))
 	}
 }
 
 // SwapCharactersBeforeCursor swaps the last two characters before the cursor.
-func (b *Buffer) SwapCharactersBeforeCursor(col istrings.Width, row int) {
-	if b.cursorPosition >= 2 {
-		x := b.Text()[b.cursorPosition-2 : b.cursorPosition-1]
-		y := b.Text()[b.cursorPosition-1 : b.cursorPosition]
-		b.setText(
-			b.Text()[:b.cursorPosition-2]+y+x+b.Text()[b.cursorPosition:],
-			col,
-			row,
-		)
+func (b *Buffer) SwapCharactersBeforeCursor() {
+	if b.CursorPosition >= 2 {
+		x := b.Text()[b.CursorPosition-2 : b.CursorPosition-1]
+		y := b.Text()[b.CursorPosition-1 : b.CursorPosition]
+		b.setText(b.Text()[:b.CursorPosition-2] + y + x + b.Text()[b.CursorPosition:])
 	}
 }
 
@@ -359,8 +196,7 @@ func NewBuffer() (b *Buffer) {
 	b = &Buffer{
 		workingLines:    []string{""},
 		workingIndex:    0,
-		startLine:       0,
-		preferredColumn: -1,
+		preferredColumn: -1, // -1 means nil
 	}
 	return
 }

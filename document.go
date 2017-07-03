@@ -2,68 +2,25 @@ package prompt
 
 import (
 	"strings"
-	"unicode"
 	"unicode/utf8"
-
-	"github.com/joeycumines/go-prompt/bisect"
-	istrings "github.com/joeycumines/go-prompt/strings"
-	"github.com/rivo/uniseg"
-	"golang.org/x/exp/utf8string"
 )
 
-// Document has text displayed in terminal and cursor position.
+// Document has text displayed in terminal and cursorposition.
 type Document struct {
-	Text string
-	// This represents a index in a rune array of Document.Text.
-	// So if Document is "日本(cursor)語", cursorPosition is 2.
-	// But DisplayedCursorPosition returns 4 because '日' and '本' are double width characters.
-	cursorPosition istrings.RuneNumber
-	lastKey        Key
-}
-
-// NewDocument return the new empty document.
-func NewDocument() *Document {
-	return &Document{
-		Text:           "",
-		cursorPosition: 0,
-	}
-}
-
-// LastKeyStroke return the last key pressed in this document.
-func (d *Document) LastKeyStroke() Key {
-	return d.lastKey
-}
-
-// DisplayCursorPosition returns the cursor position on rendered text on terminal emulators.
-// So if Document is "日本(cursor)語", DisplayedCursorPosition returns 4 because '日' and '本' are double width characters.
-//
-// For exact-fill boundaries (text that exactly fills the column width), the returned
-// Position uses legacy semantics: X=0, Y+=1. Use DisplayCursorPositionFullWidth to
-// access the raw exact-fill state instead.
-func (d *Document) DisplayCursorPosition(columns istrings.Width) Position {
-	pos, fullWidth := d.DisplayCursorPositionFullWidth(columns)
-	return legacyNormalize(pos, fullWidth)
-}
-
-// DisplayCursorPositionFullWidth returns the cursor position on rendered text
-// along with whether the cursor sits at an exact-fill wrapped boundary.
-// When fullWidth is true, the line exactly filled the column width (X == columns).
-// This is the raw internal representation; callers that need legacy coordinates
-// should use DisplayCursorPosition instead.
-func (d *Document) DisplayCursorPositionFullWidth(columns istrings.Width) (Position, bool) {
-	str := utf8string.NewString(d.Text).Slice(0, int(d.cursorPosition))
-	return positionAtEndOfString(str, columns)
+	Text           string
+	CursorPosition int
+	selectionState *SelectionState
 }
 
 // GetCharRelativeToCursor return character relative to cursor position, or empty string
-func (d *Document) GetCharRelativeToCursor(offset istrings.RuneNumber) (r rune) {
+func (d *Document) GetCharRelativeToCursor(offset int) (r rune) {
 	s := d.Text
-	var cnt istrings.RuneNumber
+	cnt := 0
 
 	for len(s) > 0 {
 		cnt++
 		r, size := utf8.DecodeRuneInString(s)
-		if cnt == d.cursorPosition+istrings.RuneNumber(offset) {
+		if cnt == d.CursorPosition+offset {
 			return r
 		}
 		s = s[size:]
@@ -71,87 +28,14 @@ func (d *Document) GetCharRelativeToCursor(offset istrings.RuneNumber) (r rune) 
 	return 0
 }
 
-// CurrentRuneIndex returns the index of the rune that's under the cursor.
-func (d *Document) CurrentRuneIndex() istrings.RuneNumber {
-	return d.cursorPosition
-}
-
-// IndentSpaces returns the amount of spaces that the last line of input
-// of the given text is indented with.
-func (d *Document) IndentSpaces(input string) int {
-	lastNewline := strings.LastIndexByte(input, '\n')
-	var spaces int
-	for i := lastNewline + 1; i < len(input); i++ {
-		b := input[i]
-		if b != ' ' {
-			break
-		}
-
-		spaces++
-	}
-
-	return spaces
-}
-
-// IndentLevel returns the indentation level of the last line of the given text.
-func (d *Document) IndentLevel(input string, indentSize int) int {
-	if indentSize == 0 {
-		return 0
-	}
-	return d.IndentSpaces(input) / indentSize
-}
-
-// LastLineIndentSpaces returns the amount of spaces that the last line of input
-// is indented with.
-func (d *Document) LastLineIndentSpaces() int {
-	return d.IndentSpaces(d.Text)
-}
-
-// LastLineIndentLevel returns the indentation level of the last line of input.
-func (d *Document) LastLineIndentLevel(indentSize int) int {
-	return d.IndentLevel(d.Text, indentSize)
-}
-
-// CurrentLineIndentSpaces returns the amount of spaces that the current line the cursor is on
-// is indented with.
-func (d *Document) CurrentLineIndentSpaces() int {
-	return d.IndentSpaces(d.TextBeforeCursor())
-}
-
-// CurrentLineIndentLevel returns the indentation level of the current line the cursor is on.
-func (d *Document) CurrentLineIndentLevel(indentSize int) int {
-	return d.IndentLevel(d.TextBeforeCursor(), indentSize)
-}
-
-// PreviousLineIndentSpaces returns the amount of spaces that the previous line (relative to the cursor)
-// is indented with.
-func (d *Document) PreviousLineIndentSpaces() int {
-	line, ok := d.PreviousLine()
-	if !ok {
-		return 0
-	}
-	return d.IndentSpaces(line)
-}
-
-// PreviousLineIndentLevel returns the indentation level of the previous line (relative to the cursor).
-func (d *Document) PreviousLineIndentLevel(indentSize int) int {
-	line, ok := d.PreviousLine()
-	if !ok {
-		return 0
-	}
-	return d.IndentLevel(line, indentSize)
-}
-
 // TextBeforeCursor returns the text before the cursor.
 func (d *Document) TextBeforeCursor() string {
-	r := []rune(d.Text)
-	return string(r[:d.cursorPosition])
+	return d.Text[:d.CursorPosition]
 }
 
 // TextAfterCursor returns the text after the cursor.
 func (d *Document) TextAfterCursor() string {
-	r := []rune(d.Text)
-	return string(r[d.cursorPosition:])
+	return d.Text[d.CursorPosition:]
 }
 
 // GetWordBeforeCursor returns the word before the cursor.
@@ -161,208 +45,18 @@ func (d *Document) GetWordBeforeCursor() string {
 	return x[d.FindStartOfPreviousWord():]
 }
 
-// GetWordAfterCursor returns the word after the cursor.
-// If we have whitespace after the cursor this returns an empty string.
-func (d *Document) GetWordAfterCursor() string {
-	x := d.TextAfterCursor()
-	return x[:d.FindEndOfCurrentWord()]
-}
-
-// GetWordBeforeCursorWithSpace returns the word before the cursor.
-// Unlike GetWordBeforeCursor, it returns string containing space
-func (d *Document) GetWordBeforeCursorWithSpace() string {
+// FindStartOfPreviousWord return an index relative to the cursor position
+// pointing to the start of the previous word. Return `None` if nothing was found.
+func (d *Document) FindStartOfPreviousWord() int {
+	// Reverse the text before the cursor, in order to do an efficient backwards search.
 	x := d.TextBeforeCursor()
-	return x[d.FindStartOfPreviousWordWithSpace():]
-}
-
-// GetWordAfterCursorWithSpace returns the word after the cursor.
-// Unlike GetWordAfterCursor, it returns string containing space
-func (d *Document) GetWordAfterCursorWithSpace() string {
-	x := d.TextAfterCursor()
-	return x[:d.FindEndOfCurrentWordWithSpace()]
-}
-
-// GetWordBeforeCursorUntilSeparator returns the text before the cursor until next separator.
-func (d *Document) GetWordBeforeCursorUntilSeparator(sep string) string {
-	x := d.TextBeforeCursor()
-	return x[d.FindStartOfPreviousWordUntilSeparator(sep):]
-}
-
-// GetWordAfterCursorUntilSeparator returns the text after the cursor until next separator.
-func (d *Document) GetWordAfterCursorUntilSeparator(sep string) string {
-	x := d.TextAfterCursor()
-	return x[:d.FindEndOfCurrentWordUntilSeparator(sep)]
-}
-
-// GetWordBeforeCursorUntilSeparatorIgnoreNextToCursor returns the word before the cursor.
-// Unlike GetWordBeforeCursor, it returns string containing space
-func (d *Document) GetWordBeforeCursorUntilSeparatorIgnoreNextToCursor(sep string) string {
-	x := d.TextBeforeCursor()
-	return x[d.FindStartOfPreviousWordUntilSeparatorIgnoreNextToCursor(sep):]
-}
-
-// GetWordAfterCursorUntilSeparatorIgnoreNextToCursor returns the word after the cursor.
-// Unlike GetWordAfterCursor, it returns string containing space
-func (d *Document) GetWordAfterCursorUntilSeparatorIgnoreNextToCursor(sep string) string {
-	x := d.TextAfterCursor()
-	return x[:d.FindEndOfCurrentWordUntilSeparatorIgnoreNextToCursor(sep)]
-}
-
-// FindStartOfPreviousWord returns an index relative to the cursor position
-// pointing to the start of the previous word. Return 0 if nothing was found.
-func (d *Document) FindStartOfPreviousWord() istrings.ByteNumber {
-	x := d.TextBeforeCursor()
-	i := istrings.ByteNumber(strings.LastIndexAny(x, " \n"))
-	if i != -1 {
-		return i + 1
+	l := len(x)
+	for i := l - 1; i > 0; i-- {
+		if x[i-1:i] == " " {
+			return i
+		}
 	}
 	return 0
-}
-
-// FindRuneNumberUntilStartOfPreviousWord returns the rune count
-// of the text before the cursor until the start of the previous word.
-func (d *Document) FindRuneNumberUntilStartOfPreviousWord() istrings.RuneNumber {
-	x := d.TextBeforeCursor()
-	return istrings.RuneCountInString(x[d.FindStartOfPreviousWordWithSpace():])
-}
-
-// FindStartOfPreviousWordWithSpace is almost the same as FindStartOfPreviousWord.
-// The only difference is to ignore contiguous spaces.
-func (d *Document) FindStartOfPreviousWordWithSpace() istrings.ByteNumber {
-	x := d.TextBeforeCursor()
-	end := istrings.LastIndexNotByte(x, ' ')
-	if end == -1 {
-		return 0
-	}
-
-	start := istrings.ByteNumber(strings.LastIndexByte(x[:end], ' '))
-	if start == -1 {
-		return 0
-	}
-	return start + 1
-}
-
-// FindStartOfPreviousWordUntilSeparator is almost the same as FindStartOfPreviousWord.
-// But this can specify Separator. Return 0 if nothing was found.
-func (d *Document) FindStartOfPreviousWordUntilSeparator(sep string) istrings.ByteNumber {
-	if sep == "" {
-		return d.FindStartOfPreviousWord()
-	}
-
-	x := d.TextBeforeCursor()
-	i := istrings.ByteNumber(strings.LastIndexAny(x, sep))
-	if i != -1 {
-		return i + 1
-	}
-	return 0
-}
-
-// FindStartOfPreviousWordUntilSeparatorIgnoreNextToCursor is almost the same as FindStartOfPreviousWordWithSpace.
-// But this can specify Separator. Return 0 if nothing was found.
-func (d *Document) FindStartOfPreviousWordUntilSeparatorIgnoreNextToCursor(sep string) istrings.ByteNumber {
-	if sep == "" {
-		return d.FindStartOfPreviousWordWithSpace()
-	}
-
-	x := d.TextBeforeCursor()
-	end := istrings.LastIndexNotAny(x, sep)
-	if end == -1 {
-		return 0
-	}
-	start := istrings.ByteNumber(strings.LastIndexAny(x[:end], sep))
-	if start == -1 {
-		return 0
-	}
-	return start + 1
-}
-
-// FindEndOfCurrentWord returns a byte index relative to the cursor position.
-// pointing to the end of the current word. Return 0 if nothing was found.
-func (d *Document) FindEndOfCurrentWord() istrings.ByteNumber {
-	x := d.TextAfterCursor()
-	i := istrings.ByteNumber(strings.IndexByte(x, ' '))
-	if i != -1 {
-		return i
-	}
-	return istrings.ByteNumber(len(x))
-}
-
-// FindEndOfCurrentWordWithSpace is almost the same as FindEndOfCurrentWord.
-// The only difference is to ignore contiguous spaces.
-func (d *Document) FindEndOfCurrentWordWithSpace() istrings.ByteNumber {
-	x := d.TextAfterCursor()
-
-	start := istrings.IndexNotByte(x, ' ')
-	if start == -1 {
-		return istrings.ByteNumber(len(x))
-	}
-
-	end := istrings.ByteNumber(strings.IndexByte(x[start:], ' '))
-	if end == -1 {
-		return istrings.ByteNumber(len(x))
-	}
-
-	return start + end
-}
-
-// FindRuneNumberUntilEndOfCurrentWord returns the number of runes
-// of the text after the cursor until the end of the current word.
-func (d *Document) FindRuneNumberUntilEndOfCurrentWord() istrings.RuneNumber {
-	t := d.TextAfterCursor()
-	var count istrings.RuneNumber
-	nonSpaceCharSeen := false
-	for _, char := range t {
-		if !nonSpaceCharSeen && char == ' ' {
-			count += 1
-			continue
-		}
-
-		if nonSpaceCharSeen && char == ' ' {
-			break
-		}
-
-		nonSpaceCharSeen = true
-		count += 1
-	}
-
-	return count
-}
-
-// FindEndOfCurrentWordUntilSeparator is almost the same as FindEndOfCurrentWord.
-// But this can specify Separator. Return 0 if nothing was found.
-func (d *Document) FindEndOfCurrentWordUntilSeparator(sep string) istrings.ByteNumber {
-	if sep == "" {
-		return d.FindEndOfCurrentWord()
-	}
-
-	x := d.TextAfterCursor()
-	i := istrings.ByteNumber(strings.IndexAny(x, sep))
-	if i != -1 {
-		return i
-	}
-	return istrings.ByteNumber(len(x))
-}
-
-// FindEndOfCurrentWordUntilSeparatorIgnoreNextToCursor is almost the same as FindEndOfCurrentWordWithSpace.
-// But this can specify Separator. Return 0 if nothing was found.
-func (d *Document) FindEndOfCurrentWordUntilSeparatorIgnoreNextToCursor(sep string) istrings.ByteNumber {
-	if sep == "" {
-		return d.FindEndOfCurrentWordWithSpace()
-	}
-
-	x := d.TextAfterCursor()
-
-	start := istrings.IndexNotAny(x, sep)
-	if start == -1 {
-		return istrings.ByteNumber(len(x))
-	}
-
-	end := istrings.ByteNumber(strings.IndexAny(x[start:], sep))
-	if end == -1 {
-		return istrings.ByteNumber(len(x))
-	}
-
-	return start + end
 }
 
 // CurrentLineBeforeCursor returns the text from the start of the line until the cursor.
@@ -382,206 +76,106 @@ func (d *Document) CurrentLine() string {
 	return d.CurrentLineBeforeCursor() + d.CurrentLineAfterCursor()
 }
 
-// PreviousLine returns the text of the previous line (relative to the cursor).
-// If the cursor is on the first line then false is returned in the second value
-// to signify that there is no previous line.
-func (d *Document) PreviousLine() (s string, ok bool) {
-	indices := d.lineStartIndices()
-	pos := bisect.Right(indices, d.cursorPosition) - 1
-	if pos == 0 {
-		return "", false
-	}
-
-	prevLineStartIndex := indices[pos-1]
-	lineStartIndex := indices[pos]
-	return d.Text[prevLineStartIndex : lineStartIndex-1], true
-}
-
-// Array pointing to the start indices of all the lines.
-func (d *Document) lineStartIndices() []istrings.RuneNumber {
+// Array pointing to the start indexes of all the lines.
+func (d *Document) lineStartIndexes() []int {
 	// TODO: Cache, because this is often reused.
 	// (If it is used, it's often used many times.
 	// And this has to be fast for editing big documents!)
 	lc := d.LineCount()
-	lengths := make([]istrings.RuneNumber, lc)
+	lengths := make([]int, lc)
 	for i, l := range d.Lines() {
-		lengths[i] = istrings.RuneNumber(len([]rune(l)))
+		lengths[i] = len(l)
 	}
 
 	// Calculate cumulative sums.
-	indices := make([]istrings.RuneNumber, lc+1)
-	indices[0] = 0 // https://github.com/jonathanslenders/python-prompt-toolkit/blob/master/prompt_toolkit/document.py#L189
-	var pos istrings.RuneNumber
+	indexes := make([]int, lc+1)
+	indexes[0] = 0 // https://github.com/jonathanslenders/python-prompt-toolkit/blob/master/prompt_toolkit/document.py#L189
+	pos := 0
 	for i, l := range lengths {
 		pos += l + 1
-		indices[i+1] = istrings.RuneNumber(pos)
+		indexes[i+1] = pos
 	}
 	if lc > 1 {
 		// Pop the last item. (This is not a new line.)
-		indices = indices[:lc]
+		indexes = indexes[:lc]
 	}
-	return indices
+	return indexes
 }
 
 // For the index of a character at a certain line, calculate the index of
 // the first character on that line.
-func (d *Document) findLineStartIndex(index istrings.RuneNumber) (pos, lineStartIndex istrings.RuneNumber) {
-	indices := d.lineStartIndices()
-	pos = bisect.Right(indices, index) - 1
-	lineStartIndex = indices[pos]
+func (d *Document) findLineStartIndex(index int) (pos int, lineStartIndex int) {
+	indexes := d.lineStartIndexes()
+	pos = BisectRight(indexes, index) - 1
+	lineStartIndex = indexes[pos]
 	return
 }
 
 // CursorPositionRow returns the current row. (0-based.)
-func (d *Document) CursorPositionRow() (row istrings.RuneNumber) {
-	row, _ = d.findLineStartIndex(d.cursorPosition)
-	return
-}
-
-// TextEndPositionRow returns the row of the end of the current text. (0-based.)
-func (d *Document) TextEndPositionRow() (row istrings.RuneNumber) {
-	textLength := istrings.RuneCountInString(d.Text)
-	if textLength == 0 {
-		return 0
-	}
-	row, _ = d.findLineStartIndex(textLength - 1)
+func (d *Document) CursorPositionRow() (row int) {
+	row, _ = d.findLineStartIndex(d.CursorPosition)
 	return
 }
 
 // CursorPositionCol returns the current column. (0-based.)
-func (d *Document) CursorPositionCol() (col istrings.Width) {
-	_, lineStartIndex := d.findLineStartIndex(d.cursorPosition)
-
-	text := utf8string.NewString(d.Text).Slice(int(lineStartIndex), int(d.cursorPosition))
-	return istrings.GetWidth(text)
+func (d *Document) CursorPositionCol() (col int) {
+	// Don't use self.text_before_cursor to calculate this. Creating substrings
+	// and splitting is too expensive for getting the cursor position.
+	_, index := d.findLineStartIndex(d.CursorPosition)
+	col = d.CursorPosition - index
+	return
 }
 
-// GetCursorLeftPosition returns the amount of runes that the cursors should be moved by.
-// The `count` argument tells this function by how many graphemes (visible characters)
-// the cursor should be moved (to the left).
-func (d *Document) GetCursorLeftPosition(count istrings.GraphemeNumber) istrings.RuneNumber {
+// GetCursorLeftPosition returns the relative position for cursor left.
+func (d *Document) GetCursorLeftPosition(count int) int {
 	if count < 0 {
 		return d.GetCursorRightPosition(-count)
 	}
-	if d.cursorPosition == 0 {
-		return 0
+	if d.CursorPositionCol() > count {
+		return -count
 	}
-	text := d.TextBeforeCursor()
-	g := uniseg.NewGraphemes(text)
-	graphemeLength := istrings.GraphemeCountInString(text)
-	var currentGraphemeIndex istrings.GraphemeNumber
-	var currentPosition istrings.RuneNumber
-
-	for g.Next() {
-		if currentGraphemeIndex >= graphemeLength-count {
-			break
-		}
-		currentPosition += istrings.RuneNumber(len(g.Runes()))
-		currentGraphemeIndex++
-	}
-
-	result := d.cursorPosition - currentPosition
-	return -result
+	return -d.CursorPositionCol()
 }
 
-// GetCursorLeftPositionRunes returns the amount of runes that the cursors should be moved by.
-// The `count` argument tells this function by how many runes
-// the cursor should be moved (to the left).
-func (d *Document) GetCursorLeftPositionRunes(count istrings.RuneNumber) istrings.RuneNumber {
-	if count < 0 {
-		return d.GetCursorRightPositionRunes(-count)
-	}
-	runeSlice := []rune(d.Text)
-	var counter istrings.RuneNumber
-	targetPosition := max(d.cursorPosition-count, 0)
-	for range runeSlice[targetPosition:d.cursorPosition] {
-		counter--
-	}
-
-	return counter
-}
-
-// GetCursorRightPosition returns the amount of runes that the cursors should be moved by.
-// The `count` argument tells this function by how many graphemes (visible characters)
-// the cursor should be moved (to the right).
-func (d *Document) GetCursorRightPosition(count istrings.GraphemeNumber) istrings.RuneNumber {
+// GetCursorRightPosition returns relative position for cursor right.
+func (d *Document) GetCursorRightPosition(count int) int {
 	if count < 0 {
 		return d.GetCursorLeftPosition(-count)
 	}
-	text := d.TextAfterCursor()
-	if len(text) == 0 {
-		return 0
+	if len(d.CurrentLineAfterCursor()) > count {
+		return count
 	}
-
-	return istrings.RuneIndexNthGrapheme(text, count)
-}
-
-// GetCursorRightPositionRunes returns the amount of runes that the cursors should be moved by.
-// The `count` argument tells this function by how many runes
-// the cursor should be moved (to the right).
-func (d *Document) GetCursorRightPositionRunes(count istrings.RuneNumber) istrings.RuneNumber {
-	if count < 0 {
-		return d.GetCursorLeftPositionRunes(-count)
-	}
-	runeSlice := []rune(d.Text)
-	var counter istrings.RuneNumber
-	targetPosition := min(d.cursorPosition+count, istrings.RuneNumber(len(runeSlice)))
-	for range runeSlice[d.cursorPosition:targetPosition] {
-		counter++
-	}
-
-	return counter
-}
-
-// GetCursorPosition returns the current cursor position.
-func (d *Document) GetCursorPosition(columns istrings.Width) Position {
-	pos, _ := d.GetCursorPositionFullWidth(columns)
-	return pos
-}
-
-// GetCursorPositionFullWidth returns the current cursor position and whether it
-// is logically sitting at an exact-fill wrapped boundary.
-func (d *Document) GetCursorPositionFullWidth(columns istrings.Width) (Position, bool) {
-	return positionAtEndOfString(d.TextBeforeCursor(), columns)
-}
-
-// GetEndOfTextPosition returns the position of the end of the current text.
-func (d *Document) GetEndOfTextPosition(columns istrings.Width) Position {
-	pos, _ := d.GetEndOfTextPositionFullWidth(columns)
-	return pos
-}
-
-// GetEndOfTextPositionFullWidth returns the end-of-text position and whether
-// it is logically sitting at an exact-fill wrapped boundary.
-func (d *Document) GetEndOfTextPositionFullWidth(columns istrings.Width) (Position, bool) {
-	return positionAtEndOfString(d.Text, columns)
+	return len(d.CurrentLineAfterCursor())
 }
 
 // GetCursorUpPosition return the relative cursor position (character index) where we would be
 // if the user pressed the arrow-up button.
-func (d *Document) GetCursorUpPosition(count int, preferredColumn istrings.Width) istrings.RuneNumber {
-	var col istrings.Width
+func (d *Document) GetCursorUpPosition(count int, preferredColumn int) int {
+	var col int
 	if preferredColumn == -1 { // -1 means nil
 		col = d.CursorPositionCol()
 	} else {
 		col = preferredColumn
 	}
 
-	row := max(int(d.CursorPositionRow())-count, 0)
-	return d.TranslateRowColToIndex(row, col) - d.cursorPosition
+	row := d.CursorPositionRow() - count
+	if row < 0 {
+		row = 0
+	}
+	return d.TranslateRowColToIndex(row, col) - d.CursorPosition
 }
 
 // GetCursorDownPosition return the relative cursor position (character index) where we would be if the
 // user pressed the arrow-down button.
-func (d *Document) GetCursorDownPosition(count int, preferredColumn istrings.Width) istrings.RuneNumber {
-	var col istrings.Width
+func (d *Document) GetCursorDownPosition(count int, preferredColumn int) int {
+	var col int
 	if preferredColumn == -1 { // -1 means nil
 		col = d.CursorPositionCol()
 	} else {
 		col = preferredColumn
 	}
-	row := int(d.CursorPositionRow()) + count
-	return d.TranslateRowColToIndex(row, col) - d.cursorPosition
+	row := d.CursorPositionRow() + count
+	return d.TranslateRowColToIndex(row, col) - d.CursorPosition
 }
 
 // Lines returns the array of all the lines.
@@ -598,32 +192,38 @@ func (d *Document) LineCount() int {
 
 // TranslateIndexToPosition given an index for the text, return the corresponding (row, col) tuple.
 // (0-based. Returns (0, 0) for index=0.)
-func (d *Document) TranslateIndexToPosition(index istrings.RuneNumber) (int, int) {
-	r, rowIndex := d.findLineStartIndex(index)
-	c := index - rowIndex
-	return int(r), int(c)
+func (d *Document) TranslateIndexToPosition(index int) (row int, col int) {
+	row, rowIndex := d.findLineStartIndex(index)
+	col = index - rowIndex
+	return
 }
 
 // TranslateRowColToIndex given a (row, col), return the corresponding index.
 // (Row and col params are 0-based.)
-func (d *Document) TranslateRowColToIndex(row int, column istrings.Width) (index istrings.RuneNumber) {
-	indices := d.lineStartIndices()
+func (d *Document) TranslateRowColToIndex(row int, column int) (index int) {
+	indexes := d.lineStartIndexes()
 	if row < 0 {
 		row = 0
-	} else if row > len(indices) {
-		row = len(indices) - 1
+	} else if row > len(indexes) {
+		row = len(indexes) - 1
 	}
-	index = indices[row]
+	index = indexes[row]
 	line := d.Lines()[row]
 
-	index += istrings.RuneIndexNthColumn(line, column)
+	// python) result += max(0, min(col, len(line)))
+	if column > 0 || len(line) > 0 {
+		if column > len(line) {
+			index += len(line)
+		} else {
+			index += column
+		}
+	}
 
-	runeLength := istrings.RuneCountInString(d.Text)
 	// Keep in range. (len(self.text) is included, because the cursor can be
 	// right after the end of the text as well.)
 	// python) result = max(0, min(result, len(self.text)))
-	if index > runeLength {
-		index = runeLength
+	if index > len(d.Text) {
+		index = len(d.Text)
 	}
 	if index < 0 {
 		index = 0
@@ -633,40 +233,12 @@ func (d *Document) TranslateRowColToIndex(row int, column istrings.Width) (index
 
 // OnLastLine returns true when we are at the last line.
 func (d *Document) OnLastLine() bool {
-	return d.CursorPositionRow() == istrings.RuneNumber(d.LineCount()-1)
+	return d.CursorPositionRow() == (d.LineCount() - 1)
 }
 
 // GetEndOfLinePosition returns relative position for the end of this line.
-func (d *Document) GetEndOfLinePosition() istrings.RuneNumber {
-	return istrings.RuneCountInString(d.CurrentLineAfterCursor())
-}
-
-// GetStartOfLinePosition returns relative position for the start of this line.
-func (d *Document) GetStartOfLinePosition() istrings.RuneNumber {
-	return istrings.RuneCountInString(d.CurrentLineBeforeCursor())
-}
-
-// FindStartOfFirstWordOfLine returns relative position for the start of the first word of the current line.
-func (d *Document) FindStartOfFirstWordOfLine() istrings.RuneNumber {
-	line := d.CurrentLineBeforeCursor()
-	var counter istrings.RuneNumber
-	var nonSpaceCharSeen bool
-	for _, char := range line {
-		if !nonSpaceCharSeen && unicode.IsSpace(char) {
-			continue
-		}
-
-		if !nonSpaceCharSeen {
-			nonSpaceCharSeen = true
-		}
-		counter++
-	}
-
-	if counter == 0 {
-		return istrings.RuneCountInString(line)
-	}
-
-	return counter
+func (d *Document) GetEndOfLinePosition() int {
+	return len(d.CurrentLineAfterCursor())
 }
 
 func (d *Document) leadingWhitespaceInCurrentLine() (margin string) {
