@@ -1,7 +1,7 @@
 package prompt
 
 import (
-	istrings "github.com/elk-language/go-prompt/strings"
+	istrings "github.com/joeycumines/go-prompt/strings"
 )
 
 // HistoryInterface lets users replace the builtin history.

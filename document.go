@@ -5,8 +5,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/elk-language/go-prompt/bisect"
-	istrings "github.com/elk-language/go-prompt/strings"
+	"github.com/joeycumines/go-prompt/bisect"
+	istrings "github.com/joeycumines/go-prompt/strings"
 	"github.com/rivo/uniseg"
 	"golang.org/x/exp/utf8string"
 )

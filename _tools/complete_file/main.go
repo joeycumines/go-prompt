@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	prompt "github.com/elk-language/go-prompt"
-	"github.com/elk-language/go-prompt/completer"
+	prompt "github.com/joeycumines/go-prompt"
+	"github.com/joeycumines/go-prompt/completer"
 )
 
 var filePathCompleter = completer.FilePathCompleter{

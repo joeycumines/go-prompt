@@ -1,7 +1,7 @@
 package prompt
 
 import (
-	istrings "github.com/elk-language/go-prompt/strings"
+	istrings "github.com/joeycumines/go-prompt/strings"
 	"github.com/rivo/uniseg"
 )
 

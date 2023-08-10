@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	istrings "github.com/elk-language/go-prompt/strings"
+	istrings "github.com/joeycumines/go-prompt/strings"
 )
 
 func TestFormatShortSuggestion(t *testing.T) {

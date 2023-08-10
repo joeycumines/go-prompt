@@ -1,9 +1,9 @@
 # go-prompt
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/elk-language/go-prompt)](https://goreportcard.com/report/github.com/elk-language/go-prompt)
+[![Go Report Card](https://goreportcard.com/badge/github.com/joeycumines/go-prompt)](https://goreportcard.com/report/github.com/joeycumines/go-prompt)
 ![Software License](https://img.shields.io/badge/license-MIT-brightgreen.svg?style=flat-square)
-[![GoDoc](https://godoc.org/github.com/elk-language/go-prompt?status.svg)](https://godoc.org/github.com/elk-language/go-prompt)
-![tests](https://github.com/elk-language/go-prompt/workflows/tests/badge.svg)
+[![GoDoc](https://godoc.org/github.com/joeycumines/go-prompt?status.svg)](https://godoc.org/github.com/joeycumines/go-prompt)
+![tests](https://github.com/joeycumines/go-prompt/workflows/tests/badge.svg)
 
 This is a fork of [c-bata/go-prompt](https://github.com/c-bata/go-prompt).
 It's a great library but it's been abandoned
@@ -30,8 +30,8 @@ package main
 
 import (
 	"fmt"
-	"github.com/elk-language/go-prompt"
-	pstrings "github.com/elk-language/go-prompt/strings"
+	"github.com/joeycumines/go-prompt"
+	pstrings "github.com/joeycumines/go-prompt/strings"
 )
 
 func completer(d prompt.Document) ([]prompt.Suggest, pstrings.RuneNumber, pstrings.RuneNumber) {
@@ -79,7 +79,7 @@ func main() {
 
 ### Flexible options
 
-go-prompt provides many options. Please check [option section of GoDoc](https://godoc.org/github.com/elk-language/go-prompt#Option) for more details.
+go-prompt provides many options. Please check [option section of GoDoc](https://godoc.org/github.com/joeycumines/go-prompt#Option) for more details.
 
 [![options](https://github.com/c-bata/assets/raw/master/go-prompt/prompt-options.png)](#flexible-options)
 
@@ -123,8 +123,8 @@ We have confirmed go-prompt works fine in the following terminals:
 ## Links
 
 * [Change Log](./CHANGELOG.md)
-* [GoDoc](http://godoc.org/github.com/elk-language/go-prompt)
-* [gocover.io](https://gocover.io/github.com/elk-language/go-prompt)
+* [GoDoc](http://godoc.org/github.com/joeycumines/go-prompt)
+* [gocover.io](https://gocover.io/github.com/joeycumines/go-prompt)
 
 ## License
 
