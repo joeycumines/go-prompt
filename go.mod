@@ -1,6 +1,6 @@
 module github.com/joeycumines/go-prompt
 
-go 1.27.2
+go 1.27.4
 
 require (
 	github.com/creack/pty v1.1.24
@@ -10,22 +10,22 @@ require (
 	github.com/mattn/go-tty v0.0.8
 	github.com/pkg/term v1.2.0-beta.2
 	github.com/rivo/uniseg v0.4.7
-	golang.org/x/exp v0.0.0-20261011100332-faecfb24eb49
-	golang.org/x/sys v0.49.0
+	golang.org/x/exp v0.0.0-20261112173441-d10d3b464990
+	golang.org/x/sys v0.50.0
 )
 
 require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
-	github.com/yuin/goldmark v1.8.6 // indirect
-	golang.org/x/exp/typeparams v0.0.0-20261011100332-faecfb24eb49 // indirect
-	golang.org/x/mod v0.42.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/tools v0.52.0 // indirect
+	github.com/yuin/goldmark v1.8.7 // indirect
+	golang.org/x/exp/typeparams v0.0.0-20261112173441-d10d3b464990 // indirect
+	golang.org/x/mod v0.43.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/tools v0.52.1-0.20261106145633-d407941a339a // indirect
 	golang.org/x/tools/cmd/godoc v0.1.0-deprecated // indirect
 	golang.org/x/tools/godoc v0.1.0-deprecated // indirect
-	honnef.co/go/tools v0.8.1 // indirect
+	honnef.co/go/tools v0.8.2 // indirect
 )
 
 tool (
